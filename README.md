@@ -1,6 +1,8 @@
 # public
 
-Public repo with example scripts I wrote.
+Public repo with example scripts I wrote. It is a reference and not all I can code, just examples with fictive or anonymous values.
+
+I have coding experience in PHP, HTML, Ansible YML, Azure Devops, Powershell, Batch and some visual basic basics ;)
 
 AI USE
 -------
