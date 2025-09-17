@@ -1,4 +1,4 @@
-# public
+# Public repo of [Dave Druiven]
 
 Public repo with example scripts I wrote. It is a reference and not all I can code, just examples with fictive or anonymous values.
 
