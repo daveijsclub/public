@@ -1,5 +1,5 @@
 <?php
-// Get user IP
+// Haal het IP-adres van de gebruiker op
 function getUserIP() {
     if (!empty($_SERVER['HTTP_CLIENT_IP'])) return $_SERVER['HTTP_CLIENT_IP'];
     if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) return explode(',', $_SERVER['HTTP_X_FORWARDED_FOR'])[0];
@@ -7,21 +7,56 @@ function getUserIP() {
 }
 $ip = getUserIP();
 
-// Get geolocation info
+// Haal geolocatie-informatie op via ip-api.com
 $geo = @json_decode(file_get_contents("http://ip-api.com/json/" . $ip));
 $country = $geo && $geo->status === "success" ? $geo->country : "Unknown";
 $lat = $geo && $geo->status === "success" ? $geo->lat : 0;
 $lon = $geo && $geo->status === "success" ? $geo->lon : 0;
 
-// Get whois info (simple, limited to Linux servers with whois installed)
+// Haal whois-informatie op via Talos Intelligence
 function getWhois($ip) {
+    // Controleer of het IP-adres geldig is
     if (!preg_match('/^[0-9\.]+$/', $ip)) return "Invalid IP";
-    $out = @shell_exec("whois " . escapeshellarg($ip) . " 2>&1");
-    return $out ? htmlspecialchars($out) : "Whois lookup failed or not available.";
+    $url = "https://talosintelligence.com/reputation_center/lookup?search=" . urlencode($ip);
+    $context = stream_context_create([
+        'http' => [
+            'user_agent' => 'Mozilla/5.0 (compatible; PHP script)',
+            'timeout' => 5
+        ]
+    ]);
+    $html = @file_get_contents($url, false, $context);
+    if (!$html) return "Talos lookup failed or not available.";
+
+    // Probeer het reputatieblok uit de HTML te halen (kan breken als Talos de layout wijzigt)
+    if (preg_match('/<div[^>]*class="field reputation-score"[^>]*>(.*?)<\/div>/is', $html, $matches)) {
+        $summary = strip_tags($matches[1]);
+        return htmlspecialchars(trim($summary));
+    }
+    // Fallback: toon een link naar Talos
+    return 'See <a href="' . htmlspecialchars($url) . '" target="_blank">Talos Intelligence Lookup</a> for details.';
 }
 $whois = getWhois($ip);
 
-// Current date
+// Haal nieuwsberichten op van de ijsclub (laatste 4 via RSS)
+function getLatestNews($rssUrl, $max = 4) {
+    $items = [];
+    $rss = @simplexml_load_file($rssUrl);
+    if ($rss && isset($rss->channel->item)) {
+        foreach ($rss->channel->item as $i => $item) {
+            if ($i >= $max) break;
+            $items[] = [
+                'title' => (string)$item->title,
+                'link' => (string)$item->link,
+                'date' => date('Y-m-d', strtotime((string)$item->pubDate)),
+                'desc' => strip_tags((string)$item->description)
+            ];
+        }
+    }
+    return $items;
+}
+$news = getLatestNews('https://www.nu.nl/rss');
+
+// Huidige datum/tijd
 $date = date('Y-m-d H:i:s');
 ?>
 <!DOCTYPE html>
@@ -30,6 +65,7 @@ $date = date('Y-m-d H:i:s');
     <title>User Info Page</title>
     <meta charset="utf-8">
     <style>
+        /* Stijl voor de pagina */
         body {
             background: #e6f2ff;
             color: #000;
@@ -71,30 +107,100 @@ $date = date('Y-m-d H:i:s');
         label {
             font-weight: bold;
         }
+        table.info-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+        }
+        table.info-table td {
+            border: none;
+            padding: 6px 8px;
+            font-size: 1.1em;
+        }
+        table.info-table label {
+            font-weight: bold;
+        }
+        .news-section {
+            margin-top: 30px;
+        }
+        .news-title {
+            font-size: 1.2em;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        .news-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        .news-list li {
+            margin-bottom: 18px;
+            background: #f4f8fb;
+            border-radius: 6px;
+            padding: 12px 14px;
+            border: 1px solid #b3d1ea;
+        }
+        .news-list .news-date {
+            font-size: 0.95em;
+            color: #555;
+            margin-bottom: 4px;
+            display: block;
+        }
     </style>
-    <!-- Leaflet CSS -->
+    <!-- Leaflet CSS voor de kaart -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
 </head>
 <body>
-    <h1>User Information</h1>
+    <h1>Gebruikersinformatie</h1>
     <div class="container">
-        <div class="info">
-            <div><label>Date:</label> <?php echo $date; ?></div>
-            <div><label>Your IP:</label> <?php echo htmlspecialchars($ip); ?></div>
-            <div><label>Country:</label> <?php echo htmlspecialchars($country); ?></div>
-        </div>
+        <table class="info-table">
+            <tr>
+                <td><label>Datum:</label></td>
+                <td><?php echo $date; ?></td>
+                <td rowspan="3" style="text-align:center; vertical-align:middle;">
+                    <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/8/85/Sciurus_carolinensis_Squirrel.jpg/220px-Sciurus_carolinensis_Squirrel.jpg" 
+                         alt="Squirrel" style="max-width:120px; border-radius:8px; box-shadow:0 2px 8px #bbb;">
+                    <div style="font-size:0.95em; color:#555; margin-top:6px;">Eekhoorn</div>
+                </td>
+            </tr>
+            <tr>
+                <td><label>Jouw IP:</label></td>
+                <td><?php echo htmlspecialchars($ip); ?></td>
+            </tr>
+            <tr>
+                <td><label>Land:</label></td>
+                <td><?php echo htmlspecialchars($country); ?></td>
+            </tr>
+        </table>
         <div>
             <label>Whois Info:</label>
             <div class="whois"><?php echo nl2br($whois); ?></div>
         </div>
         <div>
-            <label>Your Location:</label>
+            <label>Jouw Locatie:</label>
             <div id="map"></div>
         </div>
+        <div class="news-section">
+            <div class="news-title">Nieuws (nu.nl)</div>
+            <ul class="news-list">
+                <?php if ($news): foreach ($news as $item): ?>
+                    <li>
+                        <span class="news-date"><?php echo htmlspecialchars($item['date']); ?></span>
+                        <a href="<?php echo htmlspecialchars($item['link']); ?>" target="_blank">
+                            <?php echo htmlspecialchars($item['title']); ?>
+                        </a>
+                        <div><?php echo htmlspecialchars($item['desc']); ?></div>
+                    </li>
+                <?php endforeach; else: ?>
+                    <li>Geen nieuws gevonden.</li>
+                <?php endif; ?>
+            </ul>
+        </div>
     </div>
-    <!-- Leaflet JS -->
+    <!-- Leaflet JS voor de interactieve kaart -->
     <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
     <script>
+        // Zet de kaart op basis van latitude/longitude
         var lat = <?php echo json_encode($lat); ?>;
         var lon = <?php echo json_encode($lon); ?>;
         var map = L.map('map').setView([lat, lon], lat && lon ? 8 : 2);
@@ -103,7 +209,7 @@ $date = date('Y-m-d H:i:s');
         }).addTo(map);
         if (lat && lon) {
             L.marker([lat, lon]).addTo(map)
-                .bindPopup("Approximate location").openPopup();
+                .bindPopup("Geschatte locatie").openPopup();
         }
     </script>
 </body>
