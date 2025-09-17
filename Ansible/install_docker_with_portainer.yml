@@ -4,6 +4,7 @@
   become: true
 
   tasks:
+    # Install required system packages for Docker installation
     - name: Install required packages
       apt:
         name:
@@ -14,32 +15,38 @@
         state: present
         update_cache: yes
 
+    # Add Docker's official GPG key for package verification
     - name: Add Docker GPG key
       apt_key:
         url: https://download.docker.com/linux/ubuntu/gpg
         state: present
 
+    # Add Docker's official repository for Ubuntu focal
     - name: Add Docker repository
       apt_repository:
         repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu focal stable
         state: present
 
+    # Install the latest version of Docker CE
     - name: Install Docker
       apt:
         name: docker-ce
         state: latest
         update_cache: yes
 
+    # Ensure Docker service is running and enabled on boot
     - name: Ensure Docker is started
       service:
         name: docker
         state: started
         enabled: true
 
+    # Create a persistent Docker volume for Portainer data
     - name: Create Portainer volume
       docker_volume:
         name: portainer_data
 
+    # Run the Portainer container with required volumes and port mapping
     - name: Run Portainer container
       docker_container:
         name: portainer
