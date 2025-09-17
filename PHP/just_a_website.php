@@ -1,41 +1,74 @@
 <?php
 // Get user IP
 function getUserIP() {
-    if (!empty($_SERVER['HTTP_CLIENT_IP'])) return $_SERVER['HTTP_CLIENT_IP'];
-    if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) return explode(',', $_SERVER['HTTP_X_FORWARDED_FOR'])[0];
-    return $_SERVER['REMOTE_ADDR'] ?? 'UNKNOWN';
+    // Helper to validate IP is public
+    function isValidPublicIP($ip) {
+        return filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE);
+    }
+
+    if (!empty($_SERVER['HTTP_CLIENT_IP']) && isValidPublicIP($_SERVER['HTTP_CLIENT_IP'])) {
+        return $_SERVER['HTTP_CLIENT_IP'];
+    }
+    if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
+        $ips = explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']);
+        foreach ($ips as $ip) {
+            $ip = trim($ip);
+            if (isValidPublicIP($ip)) {
+                return $ip;
+            }
+        }
+    }
+    if (!empty($_SERVER['REMOTE_ADDR']) && isValidPublicIP($_SERVER['REMOTE_ADDR'])) {
+        return $_SERVER['REMOTE_ADDR'];
+    }
+    return 'UNKNOWN';
 }
+
+// Get IP
 $ip = getUserIP();
 
-// Get geolocation info
-$geo = @json_decode(file_get_contents("http://ip-api.com/json/" . $ip));
+// Geolocation lookup using ip-api.com
+// Purpose: Attempts to determine the user's country and approximate coordinates based on their public IP address.
+// Limitations: Accuracy is not guaranteed, may be affected by VPNs/proxies, and the external API may have rate limits or downtime.
+$geo = null;
+$ch = curl_init("http://ip-api.com/json/" . $ip);
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 2); // 2 seconds to connect
+curl_setopt($ch, CURLOPT_TIMEOUT, 4); // 4 seconds total timeout
+$response = curl_exec($ch);
+if ($response !== false && curl_getinfo($ch, CURLINFO_HTTP_CODE) === 200) {
+    $geo = json_decode($response);
+}
+curl_close($ch);
+
 $country = $geo && $geo->status === "success" ? $geo->country : "Unknown";
 $lat = $geo && $geo->status === "success" ? $geo->lat : 0;
 $lon = $geo && $geo->status === "success" ? $geo->lon : 0;
 
 // Get whois info (simple, limited to Linux servers with whois installed)
 function getWhois($ip) {
-    if (!preg_match('/^[0-9\.]+$/', $ip)) return "Invalid IP";
-    $out = @shell_exec("whois " . escapeshellarg($ip) . " 2>&1");
+    // Accept both IPv4 and IPv6 addresses
+    if (!filter_var($ip, FILTER_VALIDATE_IP)) return "Invalid IP";
+    $out = shell_exec("whois " . escapeshellarg($ip) . " 2>&1");
     return $out ? htmlspecialchars($out) : "Whois lookup failed or not available.";
 }
 $whois = getWhois($ip);
 
-// Current date
-$date = date('Y-m-d H:i:s');
+// Current date (ISO 8601)
+/**
+ * Get whois information for an IP address.
+ * Note: Only works on Linux servers with the 'whois' command installed.
+ * @param string $ip
+ * @return string
+ */
+function getWhois($ip) {
+    // Accept both IPv4 and IPv6 addresses
+    if (!filter_var($ip, FILTER_VALIDATE_IP)) return "Invalid IP";
+    $out = @shell_exec("whois " . escapeshellarg($ip) . " 2>&1");
+    return $out ? htmlspecialchars($out) : "Whois lookup failed or not available.";
+}
+$whois = getWhois($ip);
 ?>
-<!DOCTYPE html>
-<html>
-<head>
-    <title>User Info Page</title>
-    <meta charset="utf-8">
-    <style>
-        body {
-            background: #e6f2ff;
-            color: #000;
-            font-family: 'Arial Narrow', Arial, sans-serif;
-            margin: 0; padding: 0;
-        }
         h1 {
             font-family: Arial, sans-serif;
             font-weight: bold;
@@ -85,26 +118,33 @@ $date = date('Y-m-d H:i:s');
         </div>
         <div>
             <label>Whois Info:</label>
-            <div class="whois"><?php echo nl2br($whois); ?></div>
+        <div>
+            <label>Your Location:</label>
+            <?php if ($lat == 0 || $lon == 0): ?>
+                <div style="color: #888; margin-top: 10px;">Location unknown or unavailable.</div>
+            <?php else: ?>
+                <div id="map"></div>
+            <?php endif; ?>
+        </div>
+            <div id="map"></div>
+    <!-- Leaflet JS -->
+        <div>
+            <label>Whois Info:</label>
+            <div class="whois"><?php echo $whois; ?></div>
         </div>
         <div>
             <label>Your Location:</label>
-            <div id="map"></div>
+            <?php if ($lat == 0 || $lon == 0): ?>
+                <div style="color: #888; margin-top: 10px;">Location unknown or unavailable.</div>
+            <?php else: ?>
+                <div id="map"></div>
+            <?php endif; ?>
         </div>
-    </div>
-    <!-- Leaflet JS -->
-    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-    <script>
-        var lat = <?php echo json_encode($lat); ?>;
-        var lon = <?php echo json_encode($lon); ?>;
-        var map = L.map('map').setView([lat, lon], lat && lon ? 8 : 2);
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '© OpenStreetMap contributors'
-        }).addTo(map);
-        if (lat && lon) {
-            L.marker([lat, lon]).addTo(map)
-                .bindPopup("Approximate location").openPopup();
-        }
     </script>
+    <?php endif; ?>
+</body>
+</html>
+</body>
+</html>
 </body>
 </html>
