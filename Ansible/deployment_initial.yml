@@ -1,0 +1,162 @@
+---
+- name: Basisbeheer updates, SSH-poort, tools, UFW en wekelijkse reboot
+  hosts: all
+  become: true
+  gather_facts: true
+
+  collections:
+    - community.general
+
+  vars:
+    ssh_port: 4422
+    # Houd poort 22 tijdelijk open zodat je jezelf niet buitensluit; zet op false om 22 te verwijderen.
+    keep_port_22_during_transition: true
+    ufw_default_incoming: deny
+    ufw_default_outgoing: allow
+    ufw_logging: off  # opties: off|low|medium|high|full
+
+  pre_tasks:
+    - name: Controleer of dit een Debian/Ubuntu (APT) systeem is
+      ansible.builtin.assert:
+        that: ansible_facts.os_family == "Debian"
+        fail_msg: "Deze playbook is bedoeld voor Debian/Ubuntu (APT)."
+
+    - name: APT cache updaten
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Volledige upgrade (dist-upgrade)
+      ansible.builtin.apt:
+        upgrade: dist
+        force_apt_get: true
+
+  tasks:
+    - name: Installeer htop, screen en ufw
+      ansible.builtin.apt:
+        name:
+          - htop
+          - screen
+          - ufw
+        state: present
+
+    # =========================
+    # UFW CONFIGURATIE (vóór SSH-wijziging)
+    # =========================
+    - name: UFW - Stel default policy voor inkomend verkeer in
+      community.general.ufw:
+        direction: incoming
+        policy: "{{ ufw_default_incoming }}"
+
+    - name: UFW - Stel default policy voor uitgaand verkeer in
+      community.general.ufw:
+        direction: outgoing
+        policy: "{{ ufw_default_outgoing }}"
+
+    - name: UFW - Logging-instelling
+      community.general.ufw:
+        logging: "{{ ufw_logging }}"
+
+    - name: UFW - Sta nieuwe SSH-poort toe ({{ ssh_port }}/tcp)
+      community.general.ufw:
+        rule: allow
+        port: "{{ ssh_port }}"
+        proto: tcp
+
+    - name: UFW - Sta klassieke SSH-poort 22 tijdelijk toe (veilig overgang)
+      community.general.ufw:
+        rule: allow
+        port: "22"
+        proto: tcp
+      when: keep_port_22_during_transition
+
+    - name: UFW - Zorg dat UFW ingeschakeld is
+      community.general.ufw:
+        state: enabled
+
+    # =========================
+    # SSH-POORT WIJZIGEN
+    # =========================
+    - name: Commentarieer álle actieve 'Port' regels in sshd_config (lockout preventie)
+      ansible.builtin.replace:
+        path: /etc/ssh/sshd_config
+        regexp: '^(?!#)\s*Port\s+\d+.*$'
+        replace: '# Port (disabled by Ansible)'
+        backup: true
+      notify: "restart ssh"
+
+    - name: Zorg dat er exact één 'Port {{ ssh_port }}' regel is (toevoegen aan einde)
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^\s*Port\s+\d+'
+        line: "Port {{ ssh_port }}"
+        insertafter: EOF
+        state: present
+        backup: true
+      notify: "restart ssh"
+
+    - name: Verzamel service-feiten (detecteer juiste SSH-servicenaam)
+      ansible.builtin.service_facts:
+
+    - name: Bepaal SSH-servicenaam (Debian/Ubuntu = 'ssh', anders 'sshd')
+      ansible.builtin.set_fact:
+        ssh_service_name: "{{ 'ssh' if 'ssh.service' in ansible_facts.services else 'sshd' }}"
+
+    # Forceer directe handler-uitvoering zodat SSH daadwerkelijk op de nieuwe port draait
+    - name: Handlers nu uitvoeren (SSH herstart op nieuwe poort)
+      ansible.builtin.meta: flush_handlers
+
+    # =========================
+    # UFW OPSCHONEN (OPTIONEEL) – oude poort 22 dichtzetten
+    # =========================
+    - name: UFW - Verwijder allow-regel voor poort 22 als overgang voltooid is
+      community.general.ufw:
+        rule: allow
+        port: "22"
+        proto: tcp
+        delete: true
+      when: not keep_port_22_during_transition
+
+    # =========================
+    # CRON VOOR WEEKELIJKSE REBOOT
+    # =========================
+    - name: Wekelijkse reboot via cron
+      ansible.builtin.cron:
+        name: "Weekly reboot"
+        special_time: weekly
+        user: root
+        job: "/sbin/shutdown -r now"
+
+    # =========================
+    # APT OPSCHONEN
+    # =========================
+    - name: Autoremove ongebruikte pakketten
+      ansible.builtin.apt:
+        autoremove: true
+
+    - name: APT autoclean (oude indexbestanden)
+      ansible.builtin.apt:
+        autoclean: true
+
+    - name: APT clean (cache leegmaken)
+      ansible.builtin.apt:
+        clean: true
+    - name: Extra grondig autoremove met purge (best effort)
+      ansible.builtin.command: apt-get -y autoremove --purge
+      register: purge_autoremove
+      changed_when: false
+      args:
+        warn: false
+
+  handlers:
+    - name: Validatie sshd-config
+      listen: "restart ssh"
+      ansible.builtin.command: sshd -t
+      changed_when: false
+
+    - name: Herstart SSH-service
+      listen: "restart ssh"
+      ansible.builtin.service:
+        name: "{{ ssh_service_name | default('sshd') }}"
+        state: restarted
+        enabled: true
